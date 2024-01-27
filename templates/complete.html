@@ -1,0 +1,37 @@
+<!-- complete.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Download Complete</title>
+    <!-- include stylesheets and scripts -->
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+        }
+        .airbnb-style {
+            color: #FF5A5F;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1 class="airbnb-style text-center">Airbnb Invoice Downloader</h1>
+    <h1>Download Complete!</h1>
+    <p>Total Bookings: {{ report.total_bookings }}</p>
+    <p>Successfully Downloaded: {{ report.successful_downloads }}</p>
+    <p>Failed Downloads: {{ report.failed_downloads }}</p>
+    {% if report.failed_booking_numbers %}
+    <p>Failed Booking Numbers:</p>
+    <ul>
+        {% for booking in report.failed_booking_numbers %}
+        <li>{{ booking }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+    
+    <!-- Download button -->
+    <a href="{{ url_for('download_zip', filename=zip_path) }}" class="btn btn-primary">Download Invoices</a>
+        
+    <a href="{{ url_for('index') }}">Back to Home</a>
+</body>
+</html>
