@@ -72,6 +72,8 @@
         
             form.style.display = 'none';
             progress.style.display = 'block';   
+            var hint = document.getElementById('mfa-hint');
+            if (hint) { hint.style.display = 'block'; }
         }
     </script>
 </head>
@@ -100,6 +102,7 @@
         </div>
         <h2>Preparing Invoices for download...</h2>
         <h4>Please don't close this tab!</h4>
+        <p id="mfa-hint" class="mt-3" style="display:none;">A browser window has opened to Airbnb. Please complete login and MFA there. It will close automatically once we finish.</p>
         <!-- Optional: Add a spinner or progress bar here -->
     </div>
 

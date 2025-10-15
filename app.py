@@ -294,6 +294,13 @@ def scrape_airbnb_invoices(booking_numbers, manual_mfa=False):
 
         driver_headless.get("https://www.airbnb.com/hosting/reservations/all")
 
+        # Close visible browser now that headless session is authenticated
+        try:
+            driver_visible.quit()
+        except Exception:
+            pass
+        driver_visible = None
+
         all_downloaded_files = []
 
         for index, booking_number in enumerate(booking_numbers, start=1):
@@ -323,7 +330,8 @@ def scrape_airbnb_invoices(booking_numbers, manual_mfa=False):
             if driver_headless is not None:
                 driver_headless.quit()
         finally:
-            driver_visible.quit()
+            if driver_visible is not None:
+                driver_visible.quit()
 
     # zip the downloaded invoices here using zip_invoices function
     zip_path = zip_invoices(all_downloaded_files, download_dir)
