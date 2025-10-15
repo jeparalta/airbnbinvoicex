@@ -80,16 +80,10 @@
         <h1 class="airbnb-style text-center">Airbnb Invoice Downloader</h1>
         <form id="download-form" method="POST" onsubmit="toggleVisibility();" class="mt-4">
             
-            <div class="form-group">
-                <label for="username">Airbnb Username:</label>
-                <input type="text" id="username" name="username" class="form-control">
-            </div>
+            <!-- Credentials are no longer collected; login is manual via browser with MFA. -->
     
-            <div class="form-group">
-                <label for="password">Airbnb Password:</label>
-                <input type="password" id="password" name="password" class="form-control">
-            </div>
-    
+            <!-- MFA is now enforced; browser will open for manual completion. -->
+
             <div class="form-group">
                 <label for="booking_numbers">Enter Booking Numbers:</label>
                 <textarea id="booking_numbers" name="booking_numbers" class="form-control" rows="4"></textarea>

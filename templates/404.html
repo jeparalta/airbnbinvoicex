@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>File Not Found</title>
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+        }
+        .airbnb-style {
+            color: #FF5A5F;
+            font-weight: bold;
+        }
+    </style>
+    
+</head>
+<body class="container mt-5">
+    <h1 class="airbnb-style">Airbnb Invoice Downloader</h1>
+    <h2>We couldn't find that file.</h2>
+    <p>The download might have expired or been removed during cleanup. Please try generating the invoices again.</p>
+    <a href="{{ url_for('index') }}" class="btn btn-primary">Back to Home</a>
+</body>
+</html>
+
+
