@@ -300,7 +300,6 @@ def scrape_airbnb_invoices(booking_numbers, manual_mfa=False):
         except Exception:
             pass
         driver_visible = None
-
         all_downloaded_files = []
 
         for index, booking_number in enumerate(booking_numbers, start=1):
