@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 load_dotenv()
-from flask import Flask, render_template, request, send_file, session, redirect, url_for, abort
+from flask import Flask, render_template, request, send_file, session, redirect, url_for, abort, jsonify
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -10,7 +10,8 @@ from selenium.webdriver.support import expected_conditions as EC
 
 
 
-from threading import Timer
+from threading import Timer, Lock, Thread
+import uuid
 import time
 import zipfile
 import os
@@ -34,6 +35,10 @@ if not SECRET_KEY:
 
 # Set the Flask app's secret key
 app.secret_key = SECRET_KEY
+
+# Simple in-memory progress store keyed by client_id
+PROGRESS = {}
+PROGRESS_LOCK = Lock()
 
 
 
@@ -286,7 +291,7 @@ def zip_invoices(invoice_paths, download_dir):
 
 
 
-def scrape_airbnb_invoices(booking_numbers, manual_mfa=False):
+def scrape_airbnb_invoices(booking_numbers, manual_mfa=False, client_id=None):
     download_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'invoice_downloads')
     if not os.path.exists(download_dir):
         os.makedirs(download_dir)
@@ -294,47 +299,77 @@ def scrape_airbnb_invoices(booking_numbers, manual_mfa=False):
     total_bookings = len(booking_numbers)
     failed_downloads = []
 
-    # Visible browser for MFA login (or using persisted cookies)
-    driver_visible = initialize_driver(download_dir, headless=False)
+    driver_visible = None
     driver_headless = None
     cookie_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'session_cookies.json')
 
     try:
-        # Try to reuse existing session cookies first
-        session_loaded = load_session_cookies(driver_visible, cookie_file_path)
-        if not session_loaded:
-            # Fall back to manual MFA login
-            login_to_airbnb(driver_visible, manual_mfa=True)
-            # Save fresh cookies after successful login
-            save_session_cookies(driver_visible, cookie_file_path)
-
-        # Transfer cookies to headless browser to ensure printToPDF produces full content
-        cookies = driver_visible.get_cookies()
+        # Initialize progress with stages
+        if client_id:
+            with PROGRESS_LOCK:
+                PROGRESS[client_id] = { 
+                    'total': total_bookings, 
+                    'current': 0, 
+                    'done': False, 
+                    'status': 'started',
+                    'stage': 'session_check',
+                    'stage_progress': 5,
+                    'total_stages': 4  # session_check, mfa (if needed), downloading, finalizing
+                }
+        
+        # Try to use existing cookies with headless browser first
         driver_headless = initialize_driver(download_dir, headless=True)
-        driver_headless.get("https://www.airbnb.com/")
-        for cookie in cookies:
-            sanitized = {
-                'name': cookie.get('name'),
-                'value': cookie.get('value'),
-                'domain': cookie.get('domain'),
-                'path': cookie.get('path', '/'),
-                'secure': cookie.get('secure', False),
-            }
-            if 'expiry' in cookie:
-                sanitized['expiry'] = cookie['expiry']
-            try:
-                driver_headless.add_cookie(sanitized)
-            except Exception as e:
-                logging.info(f"Cookie add failed for {sanitized.get('name')}: {e}")
+        session_loaded = load_session_cookies(driver_headless, cookie_file_path)
+        
+        if not session_loaded:
+            # Need MFA - close headless and open visible browser
+            driver_headless.quit()
+            driver_headless = None
+            
+            # Update progress to show MFA needed
+            if client_id:
+                with PROGRESS_LOCK:
+                    if client_id in PROGRESS:
+                        PROGRESS[client_id]['status'] = 'mfa_needed'
+                        PROGRESS[client_id]['stage'] = 'mfa'
+                        PROGRESS[client_id]['stage_progress'] = 15
+            
+            driver_visible = initialize_driver(download_dir, headless=False)
+            login_to_airbnb(driver_visible, manual_mfa=True)
+            save_session_cookies(driver_visible, cookie_file_path)
+            
+            # Transfer cookies to new headless browser
+            cookies = driver_visible.get_cookies()
+            driver_headless = initialize_driver(download_dir, headless=True)
+            driver_headless.get("https://www.airbnb.com/")
+            for cookie in cookies:
+                sanitized = {
+                    'name': cookie.get('name'),
+                    'value': cookie.get('value'),
+                    'domain': cookie.get('domain'),
+                    'path': cookie.get('path', '/'),
+                    'secure': cookie.get('secure', False),
+                }
+                if 'expiry' in cookie:
+                    sanitized['expiry'] = cookie['expiry']
+                try:
+                    driver_headless.add_cookie(sanitized)
+                except Exception as e:
+                    logging.info(f"Cookie add failed for {sanitized.get('name')}: {e}")
+            
+            # Close visible browser now that headless session is authenticated
+            driver_visible.quit()
+            driver_visible = None
+
+        # Update progress to show we're ready to download
+        if client_id:
+            with PROGRESS_LOCK:
+                if client_id in PROGRESS:
+                    PROGRESS[client_id]['status'] = 'downloading'
+                    PROGRESS[client_id]['stage'] = 'downloading'
+                    PROGRESS[client_id]['stage_progress'] = 20
 
         driver_headless.get("https://www.airbnb.com/hosting/reservations/all")
-
-        # Close visible browser now that headless session is authenticated
-        try:
-            driver_visible.quit()
-        except Exception:
-            pass
-        driver_visible = None
         all_downloaded_files = []
 
         for index, booking_number in enumerate(booking_numbers, start=1):
@@ -355,6 +390,14 @@ def scrape_airbnb_invoices(booking_numbers, manual_mfa=False):
                 all_downloaded_files.extend(file_paths)
 
             time.sleep(2)
+
+            # Update progress after processing each booking
+            if client_id:
+                with PROGRESS_LOCK:
+                    PROGRESS[client_id]['current'] = index
+                    # Calculate overall progress: 20% base + 70% for downloads + 10% for finalizing
+                    download_progress = (index / total_bookings) * 70 if total_bookings > 0 else 0
+                    PROGRESS[client_id]['stage_progress'] = 20 + download_progress
 
     except Exception as e:
         logging.info(f"Error during invoice scraping: {e}")
@@ -380,20 +423,22 @@ def scrape_airbnb_invoices(booking_numbers, manual_mfa=False):
         logging.info("All invoices downloaded successfully.")
 
     
+    # Mark done in progress store
+    if client_id:
+        with PROGRESS_LOCK:
+            if client_id in PROGRESS:
+                PROGRESS[client_id]['done'] = True
+                PROGRESS[client_id]['stage'] = 'finalizing'
+                PROGRESS[client_id]['stage_progress'] = 90
     return all_downloaded_files, download_dir, failed_downloads, zip_path
 
 
 
-@app.route('/', methods=['GET', 'POST'])
-def index():
-    if request.method == 'POST':
-        booking_numbers = request.form.get('booking_numbers').split(',')
-
-        # Filter out empty strings from booking_numbers
-        booking_numbers = [number.strip() for number in booking_numbers if number.strip()]
-
+def background_scrape(client_id, booking_numbers):
+    """Run scraping in background thread"""
+    try:
         # Capture the returned values from scrape_airbnb_invoices function
-        all_downloaded_files, download_dir, failed_downloads, zip_path = scrape_airbnb_invoices(booking_numbers, manual_mfa=True)
+        all_downloaded_files, download_dir, failed_downloads, zip_path = scrape_airbnb_invoices(booking_numbers, manual_mfa=True, client_id=client_id)
 
         # Trigger cleanup with a delay
         cleanup_delay = 30  # seconds, adjust as needed
@@ -410,12 +455,66 @@ def index():
         # Store the file path and report in the session
         zip_path = os.path.basename(zip_path)
         logging.info(f"filename: {zip_path}")
-        session['zip_path'] = zip_path
-        session['report'] = report
+        
+        # Store results in progress data for completion check
+        with PROGRESS_LOCK:
+            if client_id in PROGRESS:
+                PROGRESS[client_id]['zip_path'] = zip_path
+                PROGRESS[client_id]['report'] = report
+                PROGRESS[client_id]['done'] = True
+                PROGRESS[client_id]['stage_progress'] = 100
+                
+    except Exception as e:
+        logging.exception(f"Background scrape error: {e}")
+        with PROGRESS_LOCK:
+            if client_id in PROGRESS:
+                PROGRESS[client_id]['error'] = str(e)
+                PROGRESS[client_id]['done'] = True
 
-        return redirect(url_for('complete'))
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if request.method == 'POST':
+        booking_numbers = request.form.get('booking_numbers').split(',')
+
+        # Filter out empty strings from booking_numbers
+        booking_numbers = [number.strip() for number in booking_numbers if number.strip()]
+
+        # Ensure we have a client_id to track progress
+        if 'client_id' not in session:
+            session['client_id'] = str(uuid.uuid4())
+        client_id = session['client_id']
+
+        # Start background scraping
+        thread = Thread(target=background_scrape, args=(client_id, booking_numbers))
+        thread.daemon = True
+        thread.start()
+
+        return render_template('progress.html', client_id=client_id)
 
     return render_template('index.html')
+
+@app.route('/progress', methods=['GET'])
+def progress():
+    client_id = session.get('client_id')
+    if not client_id:
+        return jsonify({ 'total': 0, 'current': 0, 'done': False, 'status': 'no_session' })
+    with PROGRESS_LOCK:
+        data = PROGRESS.get(client_id, { 'total': 0, 'current': 0, 'done': False, 'status': 'not_started' })
+    return jsonify(data)
+
+@app.route('/complete_check', methods=['GET'])
+def complete_check():
+    client_id = session.get('client_id')
+    if not client_id:
+        return jsonify({ 'done': False })
+    with PROGRESS_LOCK:
+        data = PROGRESS.get(client_id, { 'done': False })
+    if data.get('done') and 'zip_path' in data:
+        # Store in session for the complete page
+        session['zip_path'] = data['zip_path']
+        session['report'] = data['report']
+        return jsonify({ 'done': True, 'redirect': url_for('complete') })
+    return jsonify({ 'done': data.get('done', False) })
 
 @app.route('/download_zip/<filename>')
 def download_zip(filename):

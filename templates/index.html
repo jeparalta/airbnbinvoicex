@@ -7,6 +7,7 @@
         body {
             font-family: 'Helvetica Neue', Arial, sans-serif;
         }
+
         .airbnb-style {
             color: #FF5A5F;
             font-weight: bold;
@@ -76,12 +77,54 @@
             if (hint) { hint.style.display = 'block'; }
         }
 
+        async function pollProgress() {
+            try {
+                const res = await fetch('/progress');
+                const data = await res.json();
+                const bar = document.getElementById('progress-bar');
+                const label = document.getElementById('progress-label');
+                if (!data || !bar) return;
+                
+                const total = data.total || 0;
+                const current = data.current || 0;
+                const done = !!data.done;
+                const status = data.status || 'unknown';
+                const pct = total > 0 ? Math.floor((current / total) * 100) : 0;
+                
+                bar.style.width = pct + '%';
+                bar.setAttribute('aria-valuenow', pct);
+                
+                if (status === 'no_session') {
+                    label.textContent = 'Session not found…';
+                } else if (status === 'not_started') {
+                    label.textContent = 'Waiting to start…';
+                } else if (total === 0) {
+                    label.textContent = 'Initializing…';
+                } else if (done) {
+                    label.textContent = 'Finalizing…';
+                } else {
+                    label.textContent = `Downloading ${current} of ${total}…`;
+                }
+                
+                console.log('Progress:', data); // Debug log
+                
+                if (!done) {
+                    setTimeout(pollProgress, 1000);
+                }
+            } catch (e) {
+                console.log('Progress poll error:', e);
+                setTimeout(pollProgress, 2000);
+            }
+        }
+
         function onSubmitHandler(event) {
             // Prevent immediate navigation so the browser can repaint the progress state
             event.preventDefault();
             toggleVisibility();
             // Allow one frame for layout/paint, then submit
             setTimeout(function() { event.target.submit(); }, 50);
+            // Start polling after a longer delay to let server initialize
+            setTimeout(pollProgress, 2000);
             return false;
         }
     </script>
@@ -112,6 +155,10 @@
         <h2>Preparing Invoices for download...</h2>
         <h4>Please don't close this tab!</h4>
         <p id="mfa-hint" class="mt-3" style="display:none;">A browser window has opened to Airbnb. Please complete login and MFA there. It will close automatically once we finish.</p>
+        <div class="progress w-100 mt-3" style="height: 24px;">
+            <div id="progress-bar" class="progress-bar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+        </div>
+        <div id="progress-label" class="mt-2">Initializing…</div>
         <!-- Optional: Add a spinner or progress bar here -->
     </div>
 
