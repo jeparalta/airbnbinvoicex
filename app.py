@@ -121,7 +121,7 @@ def login_to_airbnb(driver, manual_mfa=False):
 
             time.sleep(5)
     except Exception as e:
-       logging.info(f"Error during login: {e}")
+        logging.exception(f"Error during login: {repr(e)} | url={getattr(driver, 'current_url', 'n/a')}")
         # Handle the error or rethrow to be caught by calling function
 
 
@@ -176,24 +176,46 @@ def download_invoice(driver, booking_number, download_dir):
         booking_url = f"https://www.airbnb.com/hosting/reservations/all?confirmationCode={booking_number}"
         driver.get(booking_url)
 
-        WebDriverWait(driver, 20).until(
+        # Ensure base page load complete
+        WebDriverWait(driver, 40).until(lambda d: d.execute_script('return document.readyState') == 'complete')
+
+        WebDriverWait(driver, 40).until(
             EC.presence_of_all_elements_located((By.XPATH, "//a[contains(@href, '/vat_invoices/')]"))
         )
 
+        # Try to trigger lazy loading in case links are not yet interactable
+        try:
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(1)
+            driver.execute_script("window.scrollTo(0, 0);")
+            time.sleep(1)
+        except Exception:
+            pass
+
+        # Re-evaluate links after potential lazy load
         download_links = driver.find_elements(By.XPATH, "//a[contains(@href, '/vat_invoices/')]")
+        logging.info(f"Found {len(download_links)} invoice link(s) for booking {booking_number}")
 
         if not download_links:
             logging.info(f"No invoice links found for booking number {booking_number}")
 
-        for link_index, link in enumerate(download_links):
-            # Wait until the link is visible and clickable
-            WebDriverWait(driver, 10).until(EC.visibility_of(link))
-            WebDriverWait(driver, 10).until(EC.element_to_be_clickable(link))
-
-            # Then click the link
-            link.click()
+        for link_index in range(len(download_links)):
+            link_xpath = f"(//a[contains(@href, '/vat_invoices/')])[{link_index+1}]"
+            WebDriverWait(driver, 40).until(
+                EC.element_to_be_clickable((By.XPATH, link_xpath))
+            )
+            link_el = driver.find_element(By.XPATH, link_xpath)
+            try:
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link_el)
+            except Exception:
+                pass
+            try:
+                driver.execute_script("arguments[0].click();", link_el)
+            except Exception:
+                link_el.click()
 
             # Since the link opens in a new tab, switch to the new tab
+            WebDriverWait(driver, 20).until(lambda d: len(d.window_handles) > 1)
             driver.switch_to.window(driver.window_handles[-1])
 
             # Ensure page fully loaded before printing
@@ -230,12 +252,25 @@ def download_invoice(driver, booking_number, download_dir):
 
             # Brief delay to allow the page to stabilize before the next interaction
             time.sleep(2)
+            # Ensure focus returns to the main tab correctly for subsequent links
+            WebDriverWait(driver, 20).until(lambda d: len(d.window_handles) >= 1)
 
         logging.info(f"Successfully downloaded invoices for booking {booking_number}")
         return True, downloaded_file_paths
     
     except Exception as e:
-        logging.info(f"Error downloading invoice for booking number {booking_number}: {str(e)}")
+        # Capture more context and a screenshot to aid debugging
+        try:
+            timestamp = int(time.time())
+            screenshot_path = os.path.join(download_dir, f"error_{booking_number}_{timestamp}.png")
+            driver.save_screenshot(screenshot_path)
+        except Exception:
+            screenshot_path = "<screenshot failed>"
+        logging.exception(
+            f"Error downloading invoice for booking number {booking_number}: {repr(e)} | "
+            f"url={getattr(driver, 'current_url', 'n/a')} | title={getattr(driver, 'title', 'n/a')} | "
+            f"screenshot={screenshot_path}"
+        )
         return False, downloaded_file_paths
     
     

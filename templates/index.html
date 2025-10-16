@@ -16,7 +16,6 @@
         }
 
         #progress-container {
-            display: flex;
             justify-content: center; /* Center horizontally */
             align-items: center; /* Center vertically */
             flex-direction: column; /* Stack children vertically */
@@ -71,16 +70,26 @@
             var progress = document.getElementById('progress-container');
         
             form.style.display = 'none';
-            progress.style.display = 'block';   
+            progress.classList.remove('hidden');
+            progress.style.display = 'flex';   
             var hint = document.getElementById('mfa-hint');
             if (hint) { hint.style.display = 'block'; }
+        }
+
+        function onSubmitHandler(event) {
+            // Prevent immediate navigation so the browser can repaint the progress state
+            event.preventDefault();
+            toggleVisibility();
+            // Allow one frame for layout/paint, then submit
+            setTimeout(function() { event.target.submit(); }, 50);
+            return false;
         }
     </script>
 </head>
 <body class="container mt-5">
     <div id="form-container">
         <h1 class="airbnb-style text-center">Airbnb Invoice Downloader</h1>
-        <form id="download-form" method="POST" onsubmit="toggleVisibility();" class="mt-4">
+        <form id="download-form" method="POST" onsubmit="return onSubmitHandler(event);" class="mt-4">
             
             <!-- Credentials are no longer collected; login is manual via browser with MFA. -->
     
