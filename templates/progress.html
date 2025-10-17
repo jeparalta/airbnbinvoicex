@@ -91,7 +91,7 @@
                 console.log('Progress:', data);
                 
                 if (!done) {
-                    setTimeout(pollProgress, 1000);
+                    setTimeout(pollProgress, 750);  // Slightly faster polling for better responsiveness
                 } else {
                     // Check if we should redirect to complete page
                     checkComplete();
@@ -110,7 +110,7 @@
                     window.location.href = data.redirect;
                 } else if (data.done) {
                     // Still processing, keep checking
-                    setTimeout(checkComplete, 1000);
+                    setTimeout(checkComplete, 750);  // Slightly faster completion checking
                 }
             } catch (e) {
                 console.log('Complete check error:', e);

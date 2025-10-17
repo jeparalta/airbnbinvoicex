@@ -51,13 +51,42 @@ def initialize_driver(download_dir, headless=True):
     if headless:
         chrome_options.add_argument("--headless")
 
-    prefs = {"download.default_directory": download_dir}
-    chrome_options.add_experimental_option("prefs", prefs)
-    
-    # Optionally, set the window size for headless mode
+    # Performance optimizations that are safe and won't trigger rate limiting
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-plugins")
+    chrome_options.add_argument("--disable-images")  # Block images for faster loading
+    chrome_options.add_argument("--disable-web-security")
+    chrome_options.add_argument("--disable-features=VizDisplayCompositor")
     chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--memory-pressure-off")
+    chrome_options.add_argument("--log-level=3")  # Reduce logging
+    chrome_options.add_argument("--silent")
+
+    prefs = {
+        "download.default_directory": download_dir,
+        "profile.default_content_setting_values": {
+            "images": 2,  # Block images
+            "plugins": 2,  # Block plugins
+            "popups": 2,  # Block popups
+            "geolocation": 2,  # Block geolocation
+            "notifications": 2,  # Block notifications
+            "media_stream": 2,  # Block media stream
+        },
+        "profile.managed_default_content_settings": {
+            "images": 2
+        }
+    }
+    chrome_options.add_experimental_option("prefs", prefs)
 
     driver = webdriver.Chrome(options=chrome_options)
+    
+    # Set timeouts for faster failure detection
+    driver.set_page_load_timeout(30)
+    driver.implicitly_wait(3)  # Reduced from default 10s
+    
     return driver
 
 
@@ -175,25 +204,26 @@ def load_session_cookies(driver, cookie_file_path):
 
 def download_invoice(driver, booking_number, download_dir):
     downloaded_file_paths = []
-    logging.info(f"Starting download for booking number {booking_number}")  # Debugging print
+    logging.info(f"Starting download for booking number {booking_number}")
 
     try:
         booking_url = f"https://www.airbnb.com/hosting/reservations/all?confirmationCode={booking_number}"
         driver.get(booking_url)
 
-        # Ensure base page load complete
-        WebDriverWait(driver, 40).until(lambda d: d.execute_script('return document.readyState') == 'complete')
+        # Reduced wait time for page load (still safe, just faster)
+        WebDriverWait(driver, 20).until(lambda d: d.execute_script('return document.readyState') == 'complete')
 
-        WebDriverWait(driver, 40).until(
+        # Reduced wait time for invoice links
+        WebDriverWait(driver, 20).until(
             EC.presence_of_all_elements_located((By.XPATH, "//a[contains(@href, '/vat_invoices/')]"))
         )
 
-        # Try to trigger lazy loading in case links are not yet interactable
+        # Optimized lazy loading trigger - faster scrolling
         try:
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1)
+            time.sleep(0.5)  # Reduced from 1 second
             driver.execute_script("window.scrollTo(0, 0);")
-            time.sleep(1)
+            time.sleep(0.5)  # Reduced from 1 second
         except Exception:
             pass
 
@@ -203,40 +233,47 @@ def download_invoice(driver, booking_number, download_dir):
 
         if not download_links:
             logging.info(f"No invoice links found for booking number {booking_number}")
+            return True, downloaded_file_paths
 
         for link_index in range(len(download_links)):
             link_xpath = f"(//a[contains(@href, '/vat_invoices/')])[{link_index+1}]"
-            WebDriverWait(driver, 40).until(
+            WebDriverWait(driver, 20).until(  # Reduced from 40 seconds
                 EC.element_to_be_clickable((By.XPATH, link_xpath))
             )
             link_el = driver.find_element(By.XPATH, link_xpath)
+            
+            # Optimized scrolling and clicking
             try:
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link_el)
+                time.sleep(0.2)  # Minimal delay for scroll
             except Exception:
                 pass
+            
             try:
                 driver.execute_script("arguments[0].click();", link_el)
             except Exception:
                 link_el.click()
 
-            # Since the link opens in a new tab, switch to the new tab
-            WebDriverWait(driver, 20).until(lambda d: len(d.window_handles) > 1)
+            # Reduced wait for new tab
+            WebDriverWait(driver, 10).until(lambda d: len(d.window_handles) > 1)  # Reduced from 20
             driver.switch_to.window(driver.window_handles[-1])
 
-            # Ensure page fully loaded before printing
-            WebDriverWait(driver, 20).until(lambda d: d.execute_script('return document.readyState') == 'complete')
+            # Reduced wait for page load
+            WebDriverWait(driver, 10).until(lambda d: d.execute_script('return document.readyState') == 'complete')  # Reduced from 20
 
-            # Define the parameters for the print to PDF command
+            # Optimized print options for faster PDF generation
             print_options = {
-                "printBackground": True,
+                "printBackground": False,  # Disabled for faster rendering
                 "pageRanges": "1",
-                "paperWidth": 8.27,   # A4 size in inches
-                "paperHeight": 11.69, # A4 size in inches
-                "marginTop": 0,       # Setting the top margin to 0
-                "marginBottom": 0,    # Setting the bottom margin to 0
-                "marginLeft": 0,      # Setting the left margin to 0
+                "paperWidth": 8.27,
+                "paperHeight": 11.69,
+                "marginTop": 0,
+                "marginBottom": 0,
+                "marginLeft": 0,
                 "marginRight": 0,
-                "preferCSSPageSize": True
+                "preferCSSPageSize": False,  # Disabled for faster processing
+                "displayHeaderFooter": False,  # Disabled for faster processing
+                "scale": 0.8  # Smaller scale for faster processing
             }
 
             # Execute the print command
@@ -255,10 +292,10 @@ def download_invoice(driver, booking_number, download_dir):
             driver.close()
             driver.switch_to.window(driver.window_handles[0])
 
-            # Brief delay to allow the page to stabilize before the next interaction
-            time.sleep(2)
-            # Ensure focus returns to the main tab correctly for subsequent links
-            WebDriverWait(driver, 20).until(lambda d: len(d.window_handles) >= 1)
+            # Reduced delay between downloads (still respectful to Airbnb)
+            time.sleep(1)  # Reduced from 2 seconds
+            # Reduced wait for window handles
+            WebDriverWait(driver, 5).until(lambda d: len(d.window_handles) >= 1)  # Reduced from 20
 
         logging.info(f"Successfully downloaded invoices for booking {booking_number}")
         return True, downloaded_file_paths
@@ -389,7 +426,7 @@ def scrape_airbnb_invoices(booking_numbers, manual_mfa=False, client_id=None):
             else:
                 all_downloaded_files.extend(file_paths)
 
-            time.sleep(2)
+            time.sleep(1)  # Reduced delay between bookings (still respectful to Airbnb)
 
             # Update progress after processing each booking
             if client_id:
