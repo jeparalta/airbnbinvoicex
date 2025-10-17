@@ -13,5 +13,19 @@ pip install -U pip
 pip install -r requirements.txt
 
 export FLASK_APP=app.py
-flask run
+export FLASK_RUN_HOST=0.0.0.0
+export FLASK_RUN_PORT=5001
+
+# Start Flask app in background
+flask run &
+FLASK_PID=$!
+
+# Wait a moment for Flask to start up
+sleep 3
+
+# Open browser to the application
+open "http://localhost:5001"
+
+# Wait for Flask process to complete
+wait $FLASK_PID
 
