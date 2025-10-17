@@ -24,42 +24,41 @@ The application requires Chrome WebDriver to interact with the Chrome browser fo
   - *Option 1*: Place the `chromedriver` executable in a directory that's in your system's PATH.
   - *Option 2*: Specify the path to `chromedriver` in the `initialize_driver` function within the script.
 
-## Installation
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/jeparalta/airbnbinvoicex.git
-   cd airbnbinvoicex
+## Quickstart
 
-2. **Set up a Virtual Environment (Optional but Recommended):**
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+```bash
+cd airbnbinvoicex
+./run.sh
+```
 
-3. **Install required Python packages:**
-    ```bash
-    pip install flask selenium
+The script will create a virtualenv, install dependencies from `requirements.txt`, and start Flask.
 
+If `./run.sh` isn't executable, run:
 
-## Running the Application
+```bash
+chmod +x run.sh
+./run.sh
+```
 
-1. **Start the Flask application, run one of the following commands in your terminal:**
-    ```bash
-    flask run   # Or python -m flask run
-    
-2. **Open a web browser and navigate to:** 
-    http://localhost:5000
+## Manual setup (alternative)
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+export FLASK_APP=app.py
+flask run
+```
 
 ## Usage
 
-- Enter your Airbnb username and password.
-- Enter the booking numbers separated spaces (for pasting multiple numbers).
-- Click the "Download Invoices" button.
-- The application will process the request and provide a ZIP file for download containing the invoices.
-- Make sure your computer doesnt go to sleep or process will get interrupted and fail!
+- Paste booking numbers (whitespace separated; we format them automatically).
+- Click "Download Invoices".
+- A browser opens for manual login/MFA; complete it. It closes automatically once scraping starts.
+- The app prepares a ZIP for download on completion.
 
 ## Security Note
 
-- Ensure that you protect your Airbnb credentials. This application does not store your credentials but uses them for scraping purposes only.
+- Credentials are no longer collected; login is manual in your own browser session.
 
 ## Legal Disclaimer
 

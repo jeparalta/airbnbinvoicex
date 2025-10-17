@@ -1,4 +1,13 @@
+# Ignore session cookies and local artifacts
+session_cookies.json
+invoice_downloads/
+__pycache__/
+*.pyc
+venv/
+airbnb_env/
+.env
 __pycache__/
 venv/
 instance/
 *.pyc
+.DS_Store
