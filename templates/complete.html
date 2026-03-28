@@ -1,37 +1,214 @@
-<!-- complete.html -->
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Download Complete</title>
-    <!-- include stylesheets and scripts -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AirbnbInvoiceX — Done</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
-        body {
-            font-family: 'Helvetica Neue', Arial, sans-serif;
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg:      #111110;
+            --surface: #1A1A18;
+            --border:  rgba(255,255,255,0.09);
+            --coral:   #FF5A5F;
+            --text:    #F0EBE3;
+            --muted:   rgba(240,235,227,0.5);
+            --green:   #5CC98A;
         }
-        .airbnb-style {
+
+        html, body {
+            height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Outfit', sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .quit-btn {
+            position: fixed;
+            top: 20px;
+            right: 24px;
+            z-index: 100;
+            background: rgba(255,90,95,0.1);
+            border: 1px solid rgba(255,90,95,0.35);
             color: #FF5A5F;
-            font-weight: bold;
+            font-family: 'Outfit', sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            padding: 9px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
         }
+        .quit-btn:hover { background: rgba(255,90,95,0.18); border-color: rgba(255,90,95,0.6); }
+
+        .page {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 60px 24px;
+            text-align: center;
+            gap: 32px;
+        }
+
+        .check {
+            width: 56px;
+            height: 56px;
+            border: 2px solid rgba(92,201,138,0.3);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        h1 {
+            font-size: clamp(2rem, 5vw, 2.8rem);
+            font-weight: 600;
+            line-height: 1.15;
+        }
+
+        .stats {
+            display: flex;
+            gap: 1px;
+            background: var(--border);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .stat {
+            flex: 1;
+            background: var(--surface);
+            padding: 22px 32px;
+            min-width: 110px;
+        }
+        .stat-value {
+            font-size: 2.6rem;
+            font-weight: 600;
+            line-height: 1;
+            margin-bottom: 6px;
+        }
+        .stat-value.green { color: var(--green); }
+        .stat-value.red   { color: var(--coral); }
+        .stat-label {
+            font-size: 13px;
+            font-weight: 400;
+            color: var(--muted);
+        }
+
+        .failed-list {
+            text-align: left;
+            max-width: 400px;
+            width: 100%;
+        }
+        .failed-title {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--muted);
+            margin-bottom: 10px;
+        }
+        .failed-item {
+            font-size: 15px;
+            color: rgba(240,235,227,0.65);
+            padding: 8px 14px;
+            border-left: 2px solid var(--coral);
+            background: rgba(255,90,95,0.05);
+            margin-bottom: 4px;
+            border-radius: 0 6px 6px 0;
+        }
+
+        .actions {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .btn-download {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 15px 36px;
+            background: var(--coral);
+            border: none;
+            border-radius: 8px;
+            color: #fff;
+            font-family: 'Outfit', sans-serif;
+            font-size: 16px;
+            font-weight: 500;
+            text-decoration: none;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+        }
+        .btn-download:hover  { background: #ff6e72; }
+        .btn-download:active { transform: scale(0.99); }
+
+        .btn-back {
+            font-size: 15px;
+            color: var(--muted);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        .btn-back:hover { color: var(--text); }
     </style>
 </head>
 <body>
-    <h1 class="airbnb-style text-center">Airbnb Invoice Downloader</h1>
-    <h1>Download Complete!</h1>
-    <p>Total Bookings: {{ report.total_bookings }}</p>
-    <p>Successfully Downloaded: {{ report.successful_downloads }}</p>
-    <p>Failed Downloads: {{ report.failed_downloads }}</p>
-    {% if report.failed_booking_numbers %}
-    <p>Failed Booking Numbers:</p>
-    <ul>
-        {% for booking in report.failed_booking_numbers %}
-        <li>{{ booking }}</li>
-        {% endfor %}
-    </ul>
-    {% endif %}
-    
-    <!-- Download button -->
-    <a href="{{ url_for('download_zip', filename=zip_path) }}" class="btn btn-primary">Download Invoices</a>
-        
-    <a href="{{ url_for('index') }}">Back to Home</a>
+
+    <form method="POST" action="/quit" onsubmit="return confirm('Quit AirbnbInvoiceX?');" style="position:fixed;top:20px;right:24px;z-index:100;">
+        <button type="submit" class="quit-btn">Quit</button>
+    </form>
+
+    <div class="page">
+        <div class="check">
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none"
+                 stroke="var(--green)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="4,11 9,16 18,6"/>
+            </svg>
+        </div>
+
+        <h1>Invoices ready</h1>
+
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-value">{{ report.total_bookings }}</div>
+                <div class="stat-label">Bookings</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value green">{{ report.successful_downloads }}</div>
+                <div class="stat-label">Downloaded</div>
+            </div>
+            {% if report.failed_downloads > 0 %}
+            <div class="stat">
+                <div class="stat-value red">{{ report.failed_downloads }}</div>
+                <div class="stat-label">Failed</div>
+            </div>
+            {% endif %}
+        </div>
+
+        {% if report.failed_booking_numbers %}
+        <div class="failed-list">
+            <div class="failed-title">Failed bookings</div>
+            {% for booking in report.failed_booking_numbers %}
+            <div class="failed-item">{{ booking }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="actions">
+            <a href="{{ url_for('download_zip', filename=zip_path) }}" class="btn-download">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M8 1v9M5 7l3 3 3-3M2 13h12"/>
+                </svg>
+                Download ZIP
+            </a>
+            <a href="{{ url_for('index') }}" class="btn-back">← Download more</a>
+        </div>
+    </div>
+
 </body>
 </html>

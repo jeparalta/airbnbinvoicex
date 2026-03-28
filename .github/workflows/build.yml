@@ -1,0 +1,129 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+      - name: Build
+        run: pyinstaller airbnbinvoicex.spec --clean
+
+      - name: Import signing certificate
+        env:
+          MACOS_CERTIFICATE:     ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+        run: |
+          echo "$MACOS_CERTIFICATE" | base64 --decode > /tmp/certificate.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import /tmp/certificate.p12 -k build.keychain \
+            -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+          rm /tmp/certificate.p12
+
+      - name: Sign app
+        run: |
+          IDENTITY=$(security find-identity -v -p codesigning build.keychain \
+            | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.+)".*/\1/')
+          echo "Signing with: $IDENTITY"
+          # Sign all inner binaries first
+          find dist/AirbnbInvoiceX.app/Contents/MacOS -type f -exec \
+            codesign --force --sign "$IDENTITY" --timestamp --options runtime {} \;
+          find dist/AirbnbInvoiceX.app -name "*.dylib" -o -name "*.so" | xargs -I {} \
+            codesign --force --sign "$IDENTITY" --timestamp --options runtime {}
+          # Sign the bundle
+          codesign --force --deep --sign "$IDENTITY" \
+            --timestamp --options runtime dist/AirbnbInvoiceX.app
+
+      - name: Notarize
+        env:
+          APPLE_ID:          ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID:     ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          cd dist
+          zip -r AirbnbInvoiceX-mac-unsigned.zip AirbnbInvoiceX.app
+          xcrun notarytool submit AirbnbInvoiceX-mac-unsigned.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id  "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple AirbnbInvoiceX.app
+          rm AirbnbInvoiceX-mac-unsigned.zip
+          zip -r AirbnbInvoiceX-mac.zip AirbnbInvoiceX.app
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-build
+          path: dist/AirbnbInvoiceX-mac.zip
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+      - name: Build
+        run: pyinstaller airbnbinvoicex.spec --clean
+      - name: Zip
+        run: Compress-Archive -Path dist\AirbnbInvoiceX -DestinationPath dist\AirbnbInvoiceX-win.zip
+        shell: powershell
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: dist\AirbnbInvoiceX-win.zip
+
+  release:
+    needs: [build-mac, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Mac build
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-build
+      - name: Download Windows build
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+      - name: Delete previous releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CURRENT_TAG: ${{ github.ref_name }}
+        run: |
+          gh release list --repo "$REPO" --limit 100 --json tagName -q '.[].tagName' | \
+          while read tag; do
+            if [ "$tag" != "$CURRENT_TAG" ]; then
+              echo "Deleting release $tag"
+              gh release delete "$tag" --repo "$REPO" --yes --cleanup-tag || true
+            fi
+          done
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            AirbnbInvoiceX-mac.zip
+            AirbnbInvoiceX-win.zip
+          generate_release_notes: true

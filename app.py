@@ -5,6 +5,7 @@ from flask import Flask, render_template, request, send_file, session, redirect,
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -18,6 +19,24 @@ import os
 import shutil
 import base64
 import json
+import signal
+import atexit
+import sys
+
+def get_user_data_dir():
+    """Return ~/Documents/AirbnbInvoiceX, creating it if needed."""
+    path = os.path.join(os.path.expanduser("~"), "Documents", "AirbnbInvoiceX")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+def check_chrome_installed():
+    """Return path to Chrome binary, or None if not found."""
+    return shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser") or \
+        next((p for p in [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        ] if os.path.isfile(p)), None)
 
 import logging
 from selenium.webdriver.remote.remote_connection import LOGGER as selenium_logger
@@ -40,6 +59,66 @@ app.secret_key = SECRET_KEY
 PROGRESS = {}
 PROGRESS_LOCK = Lock()
 
+# Track active resources for cleanup
+ACTIVE_THREADS = []
+ACTIVE_DRIVERS = []
+ACTIVE_TIMERS = []
+SHUTDOWN_REQUESTED = False
+CLEANUP_LOCK = Lock()
+
+
+
+def cleanup_all_resources():
+    """Clean up all active resources (drivers, threads, timers)"""
+    global SHUTDOWN_REQUESTED
+    SHUTDOWN_REQUESTED = True
+    
+    logging.info("Starting graceful shutdown...")
+    
+    with CLEANUP_LOCK:
+        # Cancel all active timers
+        for timer in ACTIVE_TIMERS:
+            try:
+                timer.cancel()
+            except Exception as e:
+                logging.warning(f"Error canceling timer: {e}")
+        ACTIVE_TIMERS.clear()
+        
+        # Close all active WebDriver instances
+        for driver in ACTIVE_DRIVERS:
+            try:
+                if driver is not None:
+                    driver.quit()
+            except Exception as e:
+                logging.warning(f"Error closing driver: {e}")
+        ACTIVE_DRIVERS.clear()
+        
+        # Wait for threads to finish (with timeout)
+        for thread in ACTIVE_THREADS:
+            if thread.is_alive():
+                try:
+                    thread.join(timeout=5.0)  # Wait up to 5 seconds per thread
+                    if thread.is_alive():
+                        logging.warning(f"Thread {thread.name} did not finish in time")
+                except Exception as e:
+                    logging.warning(f"Error joining thread: {e}")
+        ACTIVE_THREADS.clear()
+    
+    logging.info("Graceful shutdown completed.")
+
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals"""
+    logging.info(f"Received signal {signum}, initiating shutdown...")
+    cleanup_all_resources()
+    sys.exit(0)
+
+
+def register_shutdown_handlers():
+    """Register signal handlers and atexit handlers for graceful shutdown"""
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    atexit.register(cleanup_all_resources)
 
 
 def initialize_driver(download_dir, headless=True):
@@ -81,7 +160,16 @@ def initialize_driver(download_dir, headless=True):
     }
     chrome_options.add_experimental_option("prefs", prefs)
 
+    # Use chromium if chrome is not available (for arm64 builds)
+    chrome_binary = shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser")
+    if chrome_binary:
+        chrome_options.binary_location = chrome_binary
+    
     driver = webdriver.Chrome(options=chrome_options)
+    
+    # Track the driver for cleanup
+    with CLEANUP_LOCK:
+        ACTIVE_DRIVERS.append(driver)
     
     # Set timeouts for faster failure detection
     driver.set_page_load_timeout(30)
@@ -116,44 +204,14 @@ def cleanup_files(file_paths, download_dir):
 
 
 
-def login_to_airbnb(driver, manual_mfa=False):
+def login_to_airbnb(driver):
     try:
         logging.info("Logging into Airbnb...")
 
         driver.get("https://www.airbnb.com/login")
 
-        if manual_mfa:
-            # Let the user complete the entire login (including MFA) manually in the visible browser.
-            # Wait until we're no longer on the login page (up to 5 minutes).
-            WebDriverWait(driver, 300).until(lambda d: 'login' not in d.current_url)
-        else:
-            # Automated (non-MFA) fallback
-            continue_with_email_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Continue with email']"))
-            )
-            continue_with_email_button.click()
-
-            email_field = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.NAME, "user[email]"))
-            )
-            # Credentials removed. This path is not used in enforced MFA mode.
-
-            continue_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='signup-login-submit-btn']"))
-            )
-            continue_button.click()
-
-            password_field = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.NAME, "user[password]"))
-            )
-            # Credentials removed. This path is not used in enforced MFA mode.
-
-            login_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[@data-testid='signup-login-submit-btn']"))
-            )
-            login_button.click()
-
-            time.sleep(5)
+        # Wait until we're no longer on the login page (up to 5 minutes).
+        WebDriverWait(driver, 300).until(lambda d: 'login' not in d.current_url)
     except Exception as e:
         logging.exception(f"Error during login: {repr(e)} | url={getattr(driver, 'current_url', 'n/a')}")
         # Handle the error or rethrow to be caught by calling function
@@ -202,116 +260,188 @@ def load_session_cookies(driver, cookie_file_path):
         logging.info(f"Failed to load cookies: {e}")
         return False
 
+def find_reservation_row(driver, booking_number):
+    """Navigate directly to the filtered reservations list and return the row element or None."""
+    try:
+        url = f"https://www.airbnb.com/hosting/reservations/all?confirmationCode={booking_number}"
+        driver.get(url)
+        WebDriverWait(driver, 15).until(
+            lambda d: d.execute_script('return document.readyState') == 'complete'
+        )
+        # Since we filtered by confirmationCode, just grab the first row with a "More options" button
+        # No need to match booking number text — the URL filter already did that
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.XPATH,
+                "//tr[.//button[@aria-label='Więcej opcji' or @aria-label='More options']]"
+            ))
+        )
+        rows = driver.find_elements(By.XPATH,
+            "//tr[.//button[@aria-label='Więcej opcji' or @aria-label='More options']]"
+        )
+        if rows:
+            logging.info(f"Found reservation {booking_number}")
+            return rows[0]
+        logging.warning(f"Booking {booking_number} not found in filtered view")
+        return None
+    except Exception as e:
+        logging.warning(f"Error finding reservation {booking_number}: {e}")
+        return None
+
+
+def open_more_options_menu(driver, row):
+    """Click the 'More options' button via JS (bypasses overlays). Returns True if menu opened."""
+    try:
+        more_btn = row.find_element(
+            By.XPATH, ".//button[@aria-label='Więcej opcji' or @aria-label='More options']"
+        )
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", more_btn)
+        # JS click bypasses element-not-interactable and click-intercepted errors
+        driver.execute_script("arguments[0].click();", more_btn)
+        # Wait for the popup menu to appear (any menu link is fine)
+        WebDriverWait(driver, 5).until(
+            EC.presence_of_element_located((By.XPATH,
+                "//a[contains(@href, '/invoice/')] | "
+                "//a[contains(@href, 'message')] | "
+                "//a[contains(@href, 'reservation')]"
+            ))
+        )
+        return True
+    except Exception as e:
+        logging.warning(f"Could not open more options menu: {e}")
+        return False
+
+
+def close_popup(driver):
+    """Close any open popup by pressing Escape."""
+    try:
+        ActionChains(driver).send_keys('\ue00c').perform()  # Escape key
+        time.sleep(0.1)
+    except Exception:
+        pass
+
+
 def download_invoice(driver, booking_number, download_dir):
     downloaded_file_paths = []
     logging.info(f"Starting download for booking number {booking_number}")
 
     try:
-        booking_url = f"https://www.airbnb.com/hosting/reservations/all?confirmationCode={booking_number}"
-        driver.get(booking_url)
+        # Step 1: Find the reservation row (with pagination)
+        row = find_reservation_row(driver, booking_number)
+        if not row:
+            logging.warning(f"Reservation {booking_number} not found in the list")
+            return False, downloaded_file_paths
 
-        # Reduced wait time for page load (still safe, just faster)
-        WebDriverWait(driver, 20).until(lambda d: d.execute_script('return document.readyState') == 'complete')
+        # Step 2: Click "More options" (three dots) on that row
+        if not open_more_options_menu(driver, row):
+            return False, downloaded_file_paths
 
-        # Reduced wait time for invoice links
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_all_elements_located((By.XPATH, "//a[contains(@href, '/vat_invoices/')]"))
-        )
-
-        # Optimized lazy loading trigger - faster scrolling
-        try:
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(0.5)  # Reduced from 1 second
-            driver.execute_script("window.scrollTo(0, 0);")
-            time.sleep(0.5)  # Reduced from 1 second
-        except Exception:
-            pass
-
-        # Re-evaluate links after potential lazy load
-        download_links = driver.find_elements(By.XPATH, "//a[contains(@href, '/vat_invoices/')]")
-        logging.info(f"Found {len(download_links)} invoice link(s) for booking {booking_number}")
-
-        if not download_links:
-            logging.info(f"No invoice links found for booking number {booking_number}")
+        # Step 3: Extract invoice links from the popup
+        invoice_links = driver.find_elements(By.XPATH, "//a[contains(@href, '/invoice/')]")
+        if not invoice_links:
+            logging.warning(f"No invoice links found for booking number {booking_number}")
+            close_popup(driver)
             return True, downloaded_file_paths
 
-        for link_index in range(len(download_links)):
-            link_xpath = f"(//a[contains(@href, '/vat_invoices/')])[{link_index+1}]"
-            WebDriverWait(driver, 20).until(  # Reduced from 40 seconds
-                EC.element_to_be_clickable((By.XPATH, link_xpath))
-            )
-            link_el = driver.find_element(By.XPATH, link_xpath)
-            
-            # Optimized scrolling and clicking
+        # Collect hrefs before closing popup (elements go stale after navigation)
+        invoice_hrefs = []
+        for link in invoice_links:
+            href = link.get_attribute('href')
+            if href:
+                invoice_hrefs.append(href)
+        logging.info(f"Found {len(invoice_hrefs)} invoice link(s) for {booking_number}")
+
+        # Close the popup before navigating
+        close_popup(driver)
+
+        # Step 4: Open each invoice link and print to PDF
+        for link_index, href in enumerate(invoice_hrefs):
             try:
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link_el)
-                time.sleep(0.2)  # Minimal delay for scroll
-            except Exception:
-                pass
-            
-            try:
-                driver.execute_script("arguments[0].click();", link_el)
-            except Exception:
-                link_el.click()
+                # Open invoice in new tab
+                driver.execute_script("window.open(arguments[0], '_blank');", href)
+                WebDriverWait(driver, 5).until(lambda d: len(d.window_handles) > 1)
+                driver.switch_to.window(driver.window_handles[-1])
 
-            # Reduced wait for new tab
-            WebDriverWait(driver, 10).until(lambda d: len(d.window_handles) > 1)  # Reduced from 20
-            driver.switch_to.window(driver.window_handles[-1])
+                # Wait for page load
+                WebDriverWait(driver, 10).until(
+                    lambda d: d.execute_script('return document.readyState') == 'complete'
+                )
 
-            # Reduced wait for page load
-            WebDriverWait(driver, 10).until(lambda d: d.execute_script('return document.readyState') == 'complete')  # Reduced from 20
+                # Wait for content to be rendered
+                WebDriverWait(driver, 10).until(
+                    lambda d: len(d.find_element(By.TAG_NAME, "body").text) > 100 if d.find_elements(By.TAG_NAME, "body") else False
+                )
 
-            # Optimized print options for faster PDF generation
-            print_options = {
-                "printBackground": False,  # Disabled for faster rendering
-                "pageRanges": "1",
-                "paperWidth": 8.27,
-                "paperHeight": 11.69,
-                "marginTop": 0,
-                "marginBottom": 0,
-                "marginLeft": 0,
-                "marginRight": 0,
-                "preferCSSPageSize": False,  # Disabled for faster processing
-                "displayHeaderFooter": False,  # Disabled for faster processing
-                "scale": 0.8  # Smaller scale for faster processing
-            }
+                # Print to PDF
+                print_options = {
+                    "printBackground": False,
+                    "pageRanges": "1",
+                    "paperWidth": 8.27,
+                    "paperHeight": 11.69,
+                    "marginTop": 0,
+                    "marginBottom": 0,
+                    "marginLeft": 0,
+                    "marginRight": 0,
+                    "preferCSSPageSize": False,
+                    "displayHeaderFooter": False,
+                    "scale": 0.8
+                }
+                pdf = driver.execute_cdp_cmd("Page.printToPDF", print_options)
+                pdf_content = base64.b64decode(pdf['data'])
 
-            # Execute the print command
-            pdf = driver.execute_cdp_cmd("Page.printToPDF", print_options)
+                file_path = os.path.join(download_dir, f"invoice_{booking_number}_{link_index+1}.pdf")
+                with open(file_path, 'wb') as file:
+                    file.write(pdf_content)
+                downloaded_file_paths.append(file_path)
+                logging.info(f"Saved invoice PDF: {file_path}")
 
-            # Decode the result
-            pdf_content = base64.b64decode(pdf['data'])
+                # Close tab and switch back
+                driver.close()
+                driver.switch_to.window(driver.window_handles[0])
+                time.sleep(0.2)
 
-            # Save the PDF to a file
-            file_path = os.path.join(download_dir, f"invoice_{booking_number}_{link_index+1}.pdf")
-            with open(file_path, 'wb') as file:
-                file.write(pdf_content)
-            downloaded_file_paths.append(file_path)
+            except Exception as link_error:
+                logging.error(f"Error processing invoice link {link_index + 1}: {link_error}")
+                try:
+                    while len(driver.window_handles) > 1:
+                        driver.switch_to.window(driver.window_handles[-1])
+                        driver.close()
+                    driver.switch_to.window(driver.window_handles[0])
+                except Exception:
+                    pass
+                continue
 
-            # Close the new tab and switch back to the original tab
-            driver.close()
-            driver.switch_to.window(driver.window_handles[0])
-
-            # Reduced delay between downloads (still respectful to Airbnb)
-            time.sleep(1)  # Reduced from 2 seconds
-            # Reduced wait for window handles
-            WebDriverWait(driver, 5).until(lambda d: len(d.window_handles) >= 1)  # Reduced from 20
-
-        logging.info(f"Successfully downloaded invoices for booking {booking_number}")
+        logging.info(f"Successfully downloaded {len(downloaded_file_paths)} invoice(s) for booking {booking_number}")
         return True, downloaded_file_paths
-    
+
     except Exception as e:
-        # Capture more context and a screenshot to aid debugging
+        timestamp = int(time.time())
+        screenshot_path = None
+        html_path = None
+
         try:
-            timestamp = int(time.time())
             screenshot_path = os.path.join(download_dir, f"error_{booking_number}_{timestamp}.png")
             driver.save_screenshot(screenshot_path)
-        except Exception:
+            logging.info(f"Saved error screenshot: {screenshot_path}")
+        except Exception as screenshot_error:
             screenshot_path = "<screenshot failed>"
+            logging.warning(f"Could not save screenshot: {screenshot_error}")
+
+        try:
+            html_path = os.path.join(download_dir, f"error_{booking_number}_{timestamp}.html")
+            with open(html_path, 'w', encoding='utf-8') as f:
+                f.write(driver.page_source)
+            logging.info(f"Saved error HTML: {html_path}")
+        except Exception as html_error:
+            html_path = "<html save failed>"
+            logging.warning(f"Could not save HTML: {html_error}")
+
+        current_url = getattr(driver, 'current_url', 'n/a')
+        page_title = getattr(driver, 'title', 'n/a')
+
         logging.exception(
             f"Error downloading invoice for booking number {booking_number}: {repr(e)} | "
-            f"url={getattr(driver, 'current_url', 'n/a')} | title={getattr(driver, 'title', 'n/a')} | "
-            f"screenshot={screenshot_path}"
+            f"url={current_url} | title={page_title} | "
+            f"screenshot={screenshot_path} | html={html_path}"
         )
         return False, downloaded_file_paths
     
@@ -329,16 +459,17 @@ def zip_invoices(invoice_paths, download_dir):
 
 
 def scrape_airbnb_invoices(booking_numbers, manual_mfa=False, client_id=None):
-    download_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'invoice_downloads')
-    if not os.path.exists(download_dir):
-        os.makedirs(download_dir)
+    download_dir = os.path.join(get_user_data_dir(), 'invoice_downloads')
+    os.makedirs(download_dir, exist_ok=True)
 
     total_bookings = len(booking_numbers)
     failed_downloads = []
+    all_downloaded_files = []
+    zip_path = None
 
     driver_visible = None
     driver_headless = None
-    cookie_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'session_cookies.json')
+    cookie_file_path = os.path.join(get_user_data_dir(), 'session_cookies.json')
 
     try:
         # Initialize progress with stages
@@ -360,7 +491,13 @@ def scrape_airbnb_invoices(booking_numbers, manual_mfa=False, client_id=None):
         
         if not session_loaded:
             # Need MFA - close headless and open visible browser
-            driver_headless.quit()
+            try:
+                with CLEANUP_LOCK:
+                    if driver_headless in ACTIVE_DRIVERS:
+                        ACTIVE_DRIVERS.remove(driver_headless)
+                driver_headless.quit()
+            except Exception as e:
+                logging.warning(f"Error closing headless driver during MFA: {e}")
             driver_headless = None
             
             # Update progress to show MFA needed
@@ -372,7 +509,7 @@ def scrape_airbnb_invoices(booking_numbers, manual_mfa=False, client_id=None):
                         PROGRESS[client_id]['stage_progress'] = 15
             
             driver_visible = initialize_driver(download_dir, headless=False)
-            login_to_airbnb(driver_visible, manual_mfa=True)
+            login_to_airbnb(driver_visible)
             save_session_cookies(driver_visible, cookie_file_path)
             
             # Transfer cookies to new headless browser
@@ -395,7 +532,13 @@ def scrape_airbnb_invoices(booking_numbers, manual_mfa=False, client_id=None):
                     logging.info(f"Cookie add failed for {sanitized.get('name')}: {e}")
             
             # Close visible browser now that headless session is authenticated
-            driver_visible.quit()
+            try:
+                with CLEANUP_LOCK:
+                    if driver_visible in ACTIVE_DRIVERS:
+                        ACTIVE_DRIVERS.remove(driver_visible)
+                driver_visible.quit()
+            except Exception as e:
+                logging.warning(f"Error closing visible driver after MFA: {e}")
             driver_visible = None
 
         # Update progress to show we're ready to download
@@ -406,10 +549,14 @@ def scrape_airbnb_invoices(booking_numbers, manual_mfa=False, client_id=None):
                     PROGRESS[client_id]['stage'] = 'downloading'
                     PROGRESS[client_id]['stage_progress'] = 20
 
-        driver_headless.get("https://www.airbnb.com/hosting/reservations/all")
         all_downloaded_files = []
 
         for index, booking_number in enumerate(booking_numbers, start=1):
+            # Check for shutdown request
+            if SHUTDOWN_REQUESTED:
+                logging.info(f"Shutdown requested, stopping at booking {index} of {total_bookings}")
+                break
+            
             logging.info(f"Downloading invoices for booking {booking_number} ({index} of {total_bookings})")
 
             success, file_paths = download_invoice(driver_headless, booking_number, download_dir)
@@ -426,7 +573,7 @@ def scrape_airbnb_invoices(booking_numbers, manual_mfa=False, client_id=None):
             else:
                 all_downloaded_files.extend(file_paths)
 
-            time.sleep(1)  # Reduced delay between bookings (still respectful to Airbnb)
+            time.sleep(1)  # Delay between bookings (respectful to Airbnb)
 
             # Update progress after processing each booking
             if client_id:
@@ -437,15 +584,30 @@ def scrape_airbnb_invoices(booking_numbers, manual_mfa=False, client_id=None):
                     PROGRESS[client_id]['stage_progress'] = 20 + download_progress
 
     except Exception as e:
-        logging.info(f"Error during invoice scraping: {e}")
-        failed_downloads.extend(booking_numbers[index:])
+        logging.exception(f"Error during invoice scraping: {e}")
+        # If index is not defined (error before loop), mark all as failed
+        if 'index' in locals():
+            failed_downloads.extend(booking_numbers[index:])
+        else:
+            failed_downloads.extend(booking_numbers)
     finally:
         try:
             if driver_headless is not None:
+                with CLEANUP_LOCK:
+                    if driver_headless in ACTIVE_DRIVERS:
+                        ACTIVE_DRIVERS.remove(driver_headless)
                 driver_headless.quit()
+        except Exception as e:
+            logging.warning(f"Error closing headless driver: {e}")
         finally:
             if driver_visible is not None:
-                driver_visible.quit()
+                try:
+                    with CLEANUP_LOCK:
+                        if driver_visible in ACTIVE_DRIVERS:
+                            ACTIVE_DRIVERS.remove(driver_visible)
+                    driver_visible.quit()
+                except Exception as e:
+                    logging.warning(f"Error closing visible driver: {e}")
 
     # zip the downloaded invoices here using zip_invoices function
     zip_path = zip_invoices(all_downloaded_files, download_dir)
@@ -474,12 +636,33 @@ def scrape_airbnb_invoices(booking_numbers, manual_mfa=False, client_id=None):
 def background_scrape(client_id, booking_numbers):
     """Run scraping in background thread"""
     try:
+        # Check for shutdown request
+        if SHUTDOWN_REQUESTED:
+            logging.info("Shutdown requested, skipping background scrape")
+            return
         # Capture the returned values from scrape_airbnb_invoices function
         all_downloaded_files, download_dir, failed_downloads, zip_path = scrape_airbnb_invoices(booking_numbers, manual_mfa=True, client_id=client_id)
 
         # Trigger cleanup with a delay
         cleanup_delay = 30  # seconds, adjust as needed
-        Timer(cleanup_delay, cleanup_files, args=[all_downloaded_files, download_dir]).start()
+        
+        # Use a list to hold timer reference for closure
+        timer_ref = [None]
+        
+        def cleanup_with_removal():
+            try:
+                cleanup_files(all_downloaded_files, download_dir)
+            finally:
+                # Remove timer from active list when done
+                with CLEANUP_LOCK:
+                    if timer_ref[0] and timer_ref[0] in ACTIVE_TIMERS:
+                        ACTIVE_TIMERS.remove(timer_ref[0])
+        
+        timer = Timer(cleanup_delay, cleanup_with_removal)
+        timer_ref[0] = timer
+        with CLEANUP_LOCK:
+            ACTIVE_TIMERS.append(timer)
+        timer.start()
         # Create a summary report
         report = {
             'total_bookings': len(booking_numbers),
@@ -524,6 +707,8 @@ def index():
         # Start background scraping
         thread = Thread(target=background_scrape, args=(client_id, booking_numbers))
         thread.daemon = True
+        with CLEANUP_LOCK:
+            ACTIVE_THREADS.append(thread)
         thread.start()
 
         return render_template('progress.html', client_id=client_id)
@@ -555,7 +740,10 @@ def complete_check():
 
 @app.route('/download_zip/<filename>')
 def download_zip(filename):
-    full_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'invoice_downloads', filename)
+    safe_base = os.path.join(get_user_data_dir(), 'invoice_downloads')
+    full_path = os.path.realpath(os.path.join(safe_base, filename))
+    if not full_path.startswith(safe_base + os.sep):
+        abort(400)
     if not os.path.isfile(full_path):
         abort(404)
     return send_file(full_path, as_attachment=True)
@@ -573,6 +761,27 @@ def complete():
 
 
 
+@app.route('/quit', methods=['POST'])
+def quit_app():
+    def shutdown():
+        time.sleep(0.5)
+        cleanup_all_resources()
+        os.kill(os.getpid(), signal.SIGTERM)
+    Thread(target=shutdown, daemon=True).start()
+    return ('', 204)
+
+
 @app.errorhandler(404)
 def not_found(error):
     return render_template('404.html'), 404
+
+
+if not check_chrome_installed():
+    print("\n" + "="*60)
+    print("ERROR: Google Chrome not found.")
+    print("Please install Chrome from https://www.google.com/chrome/")
+    print("="*60 + "\n")
+    sys.exit(1)
+
+# Register shutdown handlers when the module is imported
+register_shutdown_handlers()

@@ -1,167 +1,270 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Airbnb Invoice Downloader</title>
-    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" rel="stylesheet">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AirbnbInvoiceX</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
-        body {
-            font-family: 'Helvetica Neue', Arial, sans-serif;
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg:      #111110;
+            --surface: #1A1A18;
+            --border:  rgba(255,255,255,0.09);
+            --coral:   #FF5A5F;
+            --text:    #F0EBE3;
+            --muted:   rgba(240,235,227,0.5);
         }
 
-        .airbnb-style {
+        html, body {
+            height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Outfit', sans-serif;
+            font-weight: 400;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .quit-btn {
+            position: fixed;
+            top: 20px;
+            right: 24px;
+            z-index: 100;
+            background: rgba(255,90,95,0.1);
+            border: 1px solid rgba(255,90,95,0.35);
             color: #FF5A5F;
-            font-weight: bold;
+            font-family: 'Outfit', sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            padding: 9px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
         }
-        .hidden {
-            display: none;
+        .quit-btn:hover { background: rgba(255,90,95,0.18); border-color: rgba(255,90,95,0.6); }
+
+        .page {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 60px 24px;
         }
 
+        .logo {
+            font-size: 15px;
+            font-weight: 400;
+            color: var(--muted);
+            letter-spacing: 0.04em;
+            margin-bottom: 16px;
+        }
+
+        h1 {
+            font-size: clamp(2rem, 5vw, 2.8rem);
+            font-weight: 600;
+            color: var(--text);
+            text-align: center;
+            margin-bottom: 8px;
+            line-height: 1.15;
+        }
+
+        .sub {
+            font-size: 17px;
+            color: var(--muted);
+            font-weight: 300;
+            text-align: center;
+            margin-bottom: 48px;
+        }
+
+        .card {
+            width: 100%;
+            max-width: 540px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 36px;
+        }
+
+        label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--muted);
+            margin-bottom: 10px;
+        }
+
+        textarea {
+            width: 100%;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-family: 'Outfit', sans-serif;
+            font-size: 16px;
+            font-weight: 300;
+            line-height: 1.6;
+            padding: 14px 16px;
+            resize: vertical;
+            min-height: 110px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        textarea::placeholder { color: rgba(240,235,227,0.2); }
+        textarea:focus { border-color: rgba(255,90,95,0.45); }
+
+        .hint {
+            font-size: 13px;
+            color: var(--muted);
+            margin-top: 10px;
+            line-height: 1.5;
+        }
+
+        .btn {
+            display: block;
+            width: 100%;
+            margin-top: 24px;
+            padding: 15px;
+            background: var(--coral);
+            border: none;
+            border-radius: 8px;
+            color: #fff;
+            font-family: 'Outfit', sans-serif;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+        }
+        .btn:hover  { background: #ff6e72; }
+        .btn:active { transform: scale(0.99); }
+
+        /* progress state */
         #progress-container {
-            justify-content: center; /* Center horizontally */
-            align-items: center; /* Center vertically */
-            flex-direction: column; /* Stack children vertically */
-            height: 100vh; /* Optional: Set the height of the container to full viewport height */
-            text-align: center; /* Center the text */
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            gap: 24px;
         }
-        
-        .spinner {
-            border: 5px solid #f3f3f3; /* Light grey */
-            border-top: 5px solid #3498db; /* Blue */
+
+        .ring {
+            width: 48px;
+            height: 48px;
+            border: 2px solid rgba(255,90,95,0.15);
+            border-top-color: var(--coral);
             border-radius: 50%;
-            width: 50px;
-            height: 50px;
-            animation: spin 2s linear infinite;
-            margin-bottom: 20px; /* Optional: Add some space below the spinner */
+            animation: spin 0.9s linear infinite;
         }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+
+        .progress-track {
+            width: 100%;
+            max-width: 380px;
+            height: 3px;
+            background: var(--border);
+            border-radius: 2px;
+            overflow: hidden;
         }
-        
+        .progress-fill {
+            height: 100%;
+            width: 0%;
+            background: var(--coral);
+            border-radius: 2px;
+            transition: width 0.4s ease;
+        }
+
+        .progress-label {
+            font-size: 15px;
+            color: var(--muted);
+        }
+
+        .mfa-notice {
+            display: none;
+            font-size: 15px;
+            color: #D4956A;
+            background: rgba(212,149,106,0.08);
+            border: 1px solid rgba(212,149,106,0.2);
+            border-radius: 8px;
+            padding: 14px 20px;
+            max-width: 400px;
+            line-height: 1.6;
+        }
+
+        .footer {
+            margin-top: 32px;
+            font-size: 13px;
+            color: rgba(240,235,227,0.25);
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
     <script>
-        function formatInput(input) {
-            return input.replace(/\s+/g, '\n').trim();
-        }
-
         function prepareData() {
             var textArea = document.getElementById('booking_numbers');
-            var bookingNumbers = textArea.value.split(/\s+/);
-            var formattedInput = bookingNumbers.join(',');
-            if (!formattedInput.endsWith(',')) {
-                formattedInput += ',';
-            }
-            textArea.value = formattedInput;
+            var bookingNumbers = textArea.value.split(/[\s,]+/).filter(function(s) { return s.length > 0; });
+            textArea.value = bookingNumbers.join(',');
         }
+
         window.onload = function() {
-            var textArea = document.getElementById('booking_numbers');
-        
-            textArea.addEventListener('paste', function(e) {
-                setTimeout(function() {
-                    prepareData(); // Format the pasted content after a brief delay
-                }, 100);
+            document.getElementById('booking_numbers').addEventListener('paste', function() {
+                setTimeout(prepareData, 100);
             });
         };
 
-        function toggleVisibility() {
-            console.log("Toggling visibility"); // Debugging statement
-        
-            var form = document.getElementById('download-form');
-            var progress = document.getElementById('progress-container');
-        
-            form.style.display = 'none';
-            progress.classList.remove('hidden');
-            progress.style.display = 'flex';   
-            var hint = document.getElementById('mfa-hint');
-            if (hint) { hint.style.display = 'block'; }
-        }
-
-        async function pollProgress() {
-            try {
-                const res = await fetch('/progress');
-                const data = await res.json();
-                const bar = document.getElementById('progress-bar');
-                const label = document.getElementById('progress-label');
-                if (!data || !bar) return;
-                
-                const total = data.total || 0;
-                const current = data.current || 0;
-                const done = !!data.done;
-                const status = data.status || 'unknown';
-                const pct = total > 0 ? Math.floor((current / total) * 100) : 0;
-                
-                bar.style.width = pct + '%';
-                bar.setAttribute('aria-valuenow', pct);
-                
-                if (status === 'no_session') {
-                    label.textContent = 'Session not found…';
-                } else if (status === 'not_started') {
-                    label.textContent = 'Waiting to start…';
-                } else if (total === 0) {
-                    label.textContent = 'Initializing…';
-                } else if (done) {
-                    label.textContent = 'Finalizing…';
-                } else {
-                    label.textContent = `Downloading ${current} of ${total}…`;
-                }
-                
-                console.log('Progress:', data); // Debug log
-                
-                if (!done) {
-                    setTimeout(pollProgress, 1000);
-                }
-            } catch (e) {
-                console.log('Progress poll error:', e);
-                setTimeout(pollProgress, 2000);
-            }
-        }
-
         function onSubmitHandler(event) {
-            // Prevent immediate navigation so the browser can repaint the progress state
             event.preventDefault();
-            toggleVisibility();
-            // Allow one frame for layout/paint, then submit
+            document.getElementById('form-container').style.display = 'none';
+            var p = document.getElementById('progress-container');
+            p.style.display = 'flex';
             setTimeout(function() { event.target.submit(); }, 50);
-            // Start polling after a longer delay to let server initialize
-            setTimeout(pollProgress, 2000);
             return false;
         }
     </script>
 </head>
-<body class="container mt-5">
-    <div id="form-container">
-        <h1 class="airbnb-style text-center">Airbnb Invoice Downloader</h1>
-        <form id="download-form" method="POST" onsubmit="return onSubmitHandler(event);" class="mt-4">
-            
-            <!-- Credentials are no longer collected; login is manual via browser with MFA. -->
-    
-            <!-- MFA is now enforced; browser will open for manual completion. -->
+<body>
 
-            <div class="form-group">
-                <label for="booking_numbers">Enter Booking Numbers:</label>
-                <textarea id="booking_numbers" name="booking_numbers" class="form-control" rows="4"></textarea>
+    <form method="POST" action="/quit" onsubmit="return confirm('Quit AirbnbInvoiceX?');" style="position:fixed;top:20px;right:24px;z-index:100;">
+        <button type="submit" class="quit-btn">Quit</button>
+    </form>
+
+    <div class="page">
+        <div class="logo">AirbnbInvoiceX</div>
+        <h1>Download your invoices</h1>
+        <p class="sub">Paste booking codes — we handle the rest</p>
+
+        <div id="form-container" style="width:100%;max-width:540px;">
+            <div class="card">
+                <form id="download-form" method="POST" onsubmit="return onSubmitHandler(event);">
+                    <label for="booking_numbers">Booking confirmation codes</label>
+                    <textarea
+                        id="booking_numbers"
+                        name="booking_numbers"
+                        placeholder="HMAB1234, XKQZ5678&#10;Comma or space separated"
+                    ></textarea>
+                    <p class="hint">A browser window will open for Airbnb login &amp; MFA if needed.</p>
+                    <button type="submit" class="btn">Download Invoices</button>
+                </form>
             </div>
-            
-            
-            <input type="submit" value="Download Invoices" class="btn btn-primary">
-        </form>
+        </div>
+
+        <div id="progress-container">
+            <div class="ring"></div>
+            <div>
+                <div style="font-size:1.6rem;font-weight:500;margin-bottom:6px;">Preparing your invoices…</div>
+                <div style="font-size:15px;color:var(--muted);">Keep this window open</div>
+            </div>
+            <div class="progress-track"><div class="progress-fill" id="progress-bar"></div></div>
+            <div class="progress-label" id="progress-label">Initializing…</div>
+            <div class="mfa-notice" id="mfa-hint">
+                A browser window opened for Airbnb login.<br>
+                Complete MFA there — it will close automatically.
+            </div>
+        </div>
+
+        <div class="footer">Requires Google Chrome · Files saved to ~/Documents/AirbnbInvoiceX</div>
     </div>
 
-    <div id="progress-container" class="hidden">
-        <div id="spinner-container">
-            <div class="spinner"></div>
-        </div>
-        <h2>Preparing Invoices for download...</h2>
-        <h4>Please don't close this tab!</h4>
-        <p id="mfa-hint" class="mt-3" style="display:none;">A browser window has opened to Airbnb. Please complete login and MFA there. It will close automatically once we finish.</p>
-        <div class="progress w-100 mt-3" style="height: 24px;">
-            <div id="progress-bar" class="progress-bar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
-        </div>
-        <div id="progress-label" class="mt-2">Initializing…</div>
-        <!-- Optional: Add a spinner or progress bar here -->
-    </div>
-
-    
 </body>
 </html>
