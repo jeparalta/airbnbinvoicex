@@ -5,9 +5,7 @@ from flask import Flask, render_template, request, send_file, session, redirect,
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 
 
@@ -260,98 +258,32 @@ def load_session_cookies(driver, cookie_file_path):
         logging.info(f"Failed to load cookies: {e}")
         return False
 
-def find_reservation_row(driver, booking_number):
-    """Navigate directly to the filtered reservations list and return the row element or None."""
-    try:
-        url = f"https://www.airbnb.com/hosting/reservations/all?confirmationCode={booking_number}"
-        driver.get(url)
-        WebDriverWait(driver, 15).until(
-            lambda d: d.execute_script('return document.readyState') == 'complete'
-        )
-        # Since we filtered by confirmationCode, just grab the first row with a "More options" button
-        # No need to match booking number text — the URL filter already did that
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.XPATH,
-                "//tr[.//button[@aria-label='Więcej opcji' or @aria-label='More options']]"
-            ))
-        )
-        rows = driver.find_elements(By.XPATH,
-            "//tr[.//button[@aria-label='Więcej opcji' or @aria-label='More options']]"
-        )
-        if rows:
-            logging.info(f"Found reservation {booking_number}")
-            return rows[0]
-        logging.warning(f"Booking {booking_number} not found in filtered view")
-        return None
-    except Exception as e:
-        logging.warning(f"Error finding reservation {booking_number}: {e}")
-        return None
-
-
-def open_more_options_menu(driver, row):
-    """Click the 'More options' button via JS (bypasses overlays). Returns True if menu opened."""
-    try:
-        more_btn = row.find_element(
-            By.XPATH, ".//button[@aria-label='Więcej opcji' or @aria-label='More options']"
-        )
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", more_btn)
-        # JS click bypasses element-not-interactable and click-intercepted errors
-        driver.execute_script("arguments[0].click();", more_btn)
-        # Wait for the popup menu to appear (any menu link is fine)
-        WebDriverWait(driver, 5).until(
-            EC.presence_of_element_located((By.XPATH,
-                "//a[contains(@href, '/invoice/')] | "
-                "//a[contains(@href, 'message')] | "
-                "//a[contains(@href, 'reservation')]"
-            ))
-        )
-        return True
-    except Exception as e:
-        logging.warning(f"Could not open more options menu: {e}")
-        return False
-
-
-def close_popup(driver):
-    """Close any open popup by pressing Escape."""
-    try:
-        ActionChains(driver).send_keys('\ue00c').perform()  # Escape key
-        time.sleep(0.1)
-    except Exception:
-        pass
-
 
 def download_invoice(driver, booking_number, download_dir):
     downloaded_file_paths = []
     logging.info(f"Starting download for booking number {booking_number}")
 
     try:
-        # Step 1: Find the reservation row (with pagination)
-        row = find_reservation_row(driver, booking_number)
-        if not row:
-            logging.warning(f"Reservation {booking_number} not found in the list")
-            return False, downloaded_file_paths
+        url = f"https://www.airbnb.com/hosting/reservations/details/{booking_number}?legacy_hrd=true&print=true"
+        driver.get(url)
+        WebDriverWait(driver, 15).until(
+            lambda d: d.execute_script('return document.readyState') == 'complete'
+        )
 
-        # Step 2: Click "More options" (three dots) on that row
-        if not open_more_options_menu(driver, row):
-            return False, downloaded_file_paths
-
-        # Step 3: Extract invoice links from the popup
-        invoice_links = driver.find_elements(By.XPATH, "//a[contains(@href, '/invoice/')]")
+        invoice_links = driver.find_elements(
+            By.XPATH,
+            "//a[contains(@href, '/invoice/') or contains(@href, '/vat_invoices/')]"
+        )
         if not invoice_links:
             logging.warning(f"No invoice links found for booking number {booking_number}")
-            close_popup(driver)
             return True, downloaded_file_paths
 
-        # Collect hrefs before closing popup (elements go stale after navigation)
         invoice_hrefs = []
         for link in invoice_links:
             href = link.get_attribute('href')
             if href:
                 invoice_hrefs.append(href)
         logging.info(f"Found {len(invoice_hrefs)} invoice link(s) for {booking_number}")
-
-        # Close the popup before navigating
-        close_popup(driver)
 
         # Step 4: Open each invoice link and print to PDF
         for link_index, href in enumerate(invoice_hrefs):
